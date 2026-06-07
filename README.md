@@ -29,6 +29,8 @@ rm -rf weread-skills-cli
 
 ## 配置
 
+### 1. API Token
+
 微信读书 API 需要 Bearer Token 鉴权。
 
 1. 访问微信读书网页版（weread.qq.com）
@@ -43,6 +45,25 @@ rm -rf weread-skills-cli
    echo 'export WEREAD_API_KEY=wrk-xxxxxxxx' >> ~/.bashrc
    source ~/.bashrc
    ```
+
+   Windows PowerShell 永久设置：
+   ```powershell
+   [Environment]::SetEnvironmentVariable("WEREAD_API_KEY", "wrk-xxxxxxxx", "User")
+   ```
+
+### 2. 导出模板（可选）
+
+导出笔记时默认使用内置模板。如需使用自定义 Obsidian 模板，设置 `WEREAD_TEMPLATE_PATH` 环境变量指向模板文件：
+
+```bash
+# Linux/macOS
+export WEREAD_TEMPLATE_PATH="/path/to/your-template.md"
+
+# Windows PowerShell 永久设置
+[Environment]::SetEnvironmentVariable("WEREAD_TEMPLATE_PATH", "D:\文档\Obsidian\个人库\模板库\【模板】微信读书导出.md", "User")
+```
+
+未设置时，导出脚本会使用内置备用模板并输出警告提醒。
 
 或者在项目的 `.claude/settings.local.json` 中配置（不要提交到 git）：
 ```json

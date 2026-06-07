@@ -240,12 +240,20 @@ Content-Type: application/json
    - `/book/bookmarklist`：划线内容。
    - `/review/list/mine`：个人想法/点评。
    - `/book/getprogress`：阅读进度、阅读时长、开始/完成时间。
-4. 运行 `scripts/weread_export.py` 渲染 `assets/template.md`。
+4. 运行 `scripts/weread_export.py` 渲染模板。模板加载优先级：`--template` 参数 > `WEREAD_TEMPLATE_PATH` 环境变量 > 内置 `assets/template.md`。
 5. 输出文件名使用 `阅读结束日期《书名》.md`；未读完时使用导出日期。
 
 ## 导出模板
 
-`assets/template.md` 必须以用户提供的 Obsidian 模板为准。模板中的示例划线颜色只作为版式约束，脚本会按章节替换为真实划线和想法内容。
+以用户 Obsidian 模板为准，内置模板仅作备用。加载优先级：
+
+1. `--template` 命令行参数指定的路径
+2. `WEREAD_TEMPLATE_PATH` 环境变量指向的 Obsidian 模板文件
+3. 内置 `assets/template.md`（**仅兜底，使用时会输出警告提醒用户**）
+
+必须将 `WEREAD_TEMPLATE_PATH` 设置为用户的 Obsidian 模板路径（如 `D:\文档\Obsidian\个人库\模板库\【模板】微信读书导出.md`）。若未配置且使用内置模板时，脚本会打印警告提示用户设置。
+
+模板中的示例划线颜色只作为版式约束，脚本会按章节替换为真实划线和想法内容。
 
 ## 数据处理规则
 

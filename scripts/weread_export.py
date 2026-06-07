@@ -34,6 +34,33 @@ COLOR_MAP = {
 }
 
 
+def load_template(custom_path=None):
+    """加载模板文件。以 Obsidian 模板为准，内置模板仅作备用。"""
+    # 1. 命令行 --template 参数
+    if custom_path and os.path.isfile(custom_path):
+        print(f"[信息] 使用模板（命令行参数）：{custom_path}")
+        with open(custom_path, "r", encoding="utf-8") as f:
+            return f.read()
+
+    # 2. 环境变量 WEREAD_TEMPLATE_PATH
+    env_path = os.environ.get("WEREAD_TEMPLATE_PATH")
+    if env_path and os.path.isfile(env_path):
+        print(f"[信息] 使用 Obsidian 模板：{env_path}")
+        with open(env_path, "r", encoding="utf-8") as f:
+            return f.read()
+
+    # 3. 兜底：内置备用模板（提醒用户）
+    builtin = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "assets", "template.md")
+    if os.path.isfile(builtin):
+        print("[警告] 未找到 Obsidian 模板文件，正在使用内置备用模板！", file=sys.stderr)
+        print("[警告] 建议设置环境变量 WEREAD_TEMPLATE_PATH 指向你的模板文件，以获得完整版式。", file=sys.stderr)
+        with open(builtin, "r", encoding="utf-8") as f:
+            return f.read()
+
+    print("[错误] 未找到任何可用的模板文件", file=sys.stderr)
+    sys.exit(1)
+
+
 def ts_to_date(ts):
     """Unix 时间戳 → YYYY-MM-DD"""
     if not ts:
@@ -241,7 +268,7 @@ def replace_section(markdown, start_pattern, end_pattern, replacement):
     return re.sub(pattern, lambda m: f"{m.group(1)}\n\n{replacement.rstrip()}\n", markdown, flags=re.S)
 
 
-def generate_markdown(data, export_date=None):
+def generate_markdown(data, export_date=None, template_path=None):
     """生成完整的 Markdown 笔记"""
     book_info = data["book_info"]
     chapter_info = data["chapter_info"]
@@ -291,16 +318,17 @@ def generate_markdown(data, export_date=None):
     thoughts_section = render_thoughts_section(thoughts_by_chapter)
     reading_link = f"weread://reading?bId={book_id}" if book_id else ""
 
-    # 读取模板并替换占位符
-    template_path = os.path.join(os.path.dirname(__file__), "..", "assets", "template.md")
-    with open(template_path, "r", encoding="utf-8") as f:
-        template = f.read()
+    # 加载模板
+    template = load_template(template_path)
 
     replacements = {
         "{{封面}}": cover,
         "{{作者}}": author,
         "{{分类}}": category,
+        "{{书名}}": title,
         "{{当日导出时间}}": current_export_date,
+        "{{导出时间}}": current_export_date,
+        "{{bookId}}": book_id,
         "{{划线数}}": str(highlight_count),
         "{{想法数}}": str(thought_count),
         "{{书签数}}": str(bookmark_count),
@@ -324,7 +352,7 @@ def generate_markdown(data, export_date=None):
     result = replace_section(
         result,
         r"## 二、想法与点评（\d+条）",
-        r"\n---\n\n## 三、书签",
+        r"\n---\n\n## ",
         thoughts_section or "无想法/点评",
     )
 
@@ -338,6 +366,7 @@ def main():
     parser.add_argument("--output", default=".", help="输出目录路径")
     parser.add_argument("--date", default=None, help="导出日期 (YYYY-MM-DD)，默认自动检测")
     parser.add_argument("--json-data", default=None, help="直接传入 JSON 数据文件路径（跳过 API 调用）")
+    parser.add_argument("--template", default=None, help="自定义模板文件路径（默认使用 WEREAD_TEMPLATE_PATH 环境变量或内置模板）")
     args = parser.parse_args()
 
     # 获取 API Key
@@ -354,7 +383,7 @@ def main():
         data = fetch_book_data(args.book_id, api_key)
 
     # 生成 Markdown
-    markdown, filename = generate_markdown(data, args.date)
+    markdown, filename = generate_markdown(data, args.date, args.template)
 
     # 输出文件
     output_path = os.path.join(args.output, filename)
