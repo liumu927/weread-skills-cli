@@ -129,10 +129,12 @@ def fetch_book_data(book_id, api_key):
     print("[信息] 获取划线列表...")
     bookmark_list = api_call("/book/bookmarklist", api_key, {"bookId": book_id})
 
-    # 4. 想法列表（需分页）
+    # 4. 想法列表
+    #    API 的 hasMore 字段不可靠（可能始终为 0），用 totalCount 判断是否还有更多
     print("[信息] 获取想法/点评...")
     all_reviews = []
     synckey = 0
+    total_count = None
     page = 0
     while True:
         page += 1
@@ -144,9 +146,26 @@ def fetch_book_data(book_id, api_key):
         reviews = review_data.get("reviews", [])
         all_reviews.extend(reviews)
         print(f"[信息]   第{page}页获取 {len(reviews)} 条想法")
-        has_more = review_data.get("hasMore", 0)
-        if not has_more or has_more == 0:
+
+        if total_count is None:
+            total_count = review_data.get("totalCount", len(all_reviews))
+
+        # 已拿齐 → 结束
+        if len(all_reviews) >= total_count:
             break
+
+        # 本页为空但未拿齐 → synckey 分页失效，用大 count 一次性拉取
+        if not reviews:
+            print(f"[信息]   分页返回空，尝试用 count={total_count} 一次性获取...")
+            full_data = api_call(
+                "/review/list/mine",
+                api_key,
+                {"bookid": book_id, "synckey": 0, "count": total_count},
+            )
+            all_reviews = full_data.get("reviews", all_reviews)
+            print(f"[信息]   获取共 {len(all_reviews)} 条想法")
+            break
+
         new_synckey = review_data.get("synckey", 0)
         if new_synckey == synckey:
             break
@@ -166,38 +185,97 @@ def fetch_book_data(book_id, api_key):
 
 
 def build_chapter_map(chapter_info):
-    """构建 chapterUid → 章节标题 的映射"""
+    """构建 chapterUid → 章节标题 的映射，同时返回章节顺序列表。
+    对于含多部的合集（如"明朝那些事儿·第1部 洪武大帝"），自动为章节标题
+    添加所属部的前缀，避免不同部中相同章节号混淆。
+    返回 (chapter_map, chapter_order, resolve_title)。
+    resolve_title(uid, fallback_title) 可用于对任意 uid 解析带前缀的标题。
+    """
     chapters = chapter_info.get("chapters", [])
-    return {c["chapterUid"]: c["title"] for c in chapters}
+    chapter_map = {}
+    chapter_order = []
+    uid_to_part = {}  # chapterUid → 所属部名
+    current_part = None
+
+    for c in chapters:
+        uid = c["chapterUid"]
+        title = c["title"]
+        chapter_order.append(uid)
+
+        # 检测"部"级标题（如"明朝那些事儿·第1部 洪武大帝"）
+        if "部" in title and ("第" in title or "卷" in title):
+            part_match = re.search(r'(第\d+部\s*\S+)', title)
+            if part_match:
+                current_part = part_match.group(1)
+            else:
+                current_part = title
+            continue
+
+        # 记录该 uid 所属的部
+        if current_part:
+            uid_to_part[uid] = current_part
+            chapter_map[uid] = f"[{current_part}] {title}"
+        else:
+            chapter_map[uid] = title
+
+    def resolve_title(uid, fallback_title=None):
+        """解析 uid 对应的带前缀标题，用于外部章节映射"""
+        if uid in chapter_map:
+            return chapter_map[uid]
+        part = uid_to_part.get(uid)
+        title = fallback_title or f"未知章节({uid})"
+        return f"[{part}] {title}" if part else title
+
+    return chapter_map, chapter_order, resolve_title
 
 
-def build_highlights(bookmark_list, chapter_map):
-    """按章节分组划线"""
+def build_highlights(bookmark_list, chapter_map, chapter_order, resolve_title):
+    """按章节分组划线，按阅读顺序排列"""
     highlights = bookmark_list.get("updated", [])
     chapters_in_bookmark = {c["chapterUid"]: c["title"] for c in bookmark_list.get("chapters", [])}
-
-    # 合并两个章节映射（bookmarklist 的 chapters 可能更完整）
-    merged_map = {**chapter_map, **chapters_in_bookmark}
 
     grouped = defaultdict(list)
     for h in highlights:
         uid = h.get("chapterUid", 0)
-        title = merged_map.get(uid, f"未知章节({uid})")
+        fallback = chapters_in_bookmark.get(uid)
+        title = resolve_title(uid, fallback)
         grouped[title].append(h)
 
-    return dict(grouped)
+    # 按 chapterinfo 的阅读顺序排序
+    ordered = {}
+    for uid in chapter_order:
+        title = chapter_map.get(uid)
+        if title and title in grouped:
+            ordered[title] = grouped[title]
+    # 追加不在 chapter_order 中的章节（兜底）
+    for title, items in grouped.items():
+        if title not in ordered:
+            ordered[title] = items
+
+    return ordered
 
 
-def build_thoughts(reviews, chapter_map):
-    """按章节分组想法/点评"""
+def build_thoughts(reviews, chapter_map, chapter_order, resolve_title):
+    """按章节分组想法/点评，按阅读顺序排列"""
     grouped = defaultdict(list)
     for r in reviews:
         review = r.get("review", {})
         uid = review.get("chapterUid", 0)
-        title = review.get("chapterName") or chapter_map.get(uid, f"未知章节({uid})")
+        fallback = review.get("chapterName")
+        title = resolve_title(uid, fallback)
         grouped[title].append(review)
 
-    return dict(grouped)
+    # 按 chapterinfo 的阅读顺序排序
+    ordered = {}
+    for uid in chapter_order:
+        title = chapter_map.get(uid)
+        if title and title in grouped:
+            ordered[title] = grouped[title]
+    for title, items in grouped.items():
+        if title not in ordered:
+            ordered[title] = items
+
+    return ordered
 
 
 def render_highlight(h):
@@ -263,9 +341,17 @@ def determine_filename(title, export_date):
 
 
 def replace_section(markdown, start_pattern, end_pattern, replacement):
-    """替换模板中一段示例内容，保留标题和分隔线结构。"""
-    pattern = f"({start_pattern})(.*?)(?={end_pattern})"
-    return re.sub(pattern, lambda m: f"{m.group(1)}\n\n{replacement.rstrip()}\n", markdown, flags=re.S)
+    """替换模板中一段示例内容，保留标题和分隔线结构。
+    start_pattern: 本节标题行（保留）
+    end_pattern: 下一节的标题行（保留，不被吞掉）
+    """
+    pattern = f"({start_pattern})(.*?)({end_pattern})"
+    return re.sub(
+        pattern,
+        lambda m: f"{m.group(1)}\n\n{replacement.rstrip()}\n\n{m.group(3)}",
+        markdown,
+        flags=re.S,
+    )
 
 
 def generate_markdown(data, export_date=None, template_path=None):
@@ -298,12 +384,12 @@ def generate_markdown(data, export_date=None, template_path=None):
     else:
         reading_days = 0
 
-    # 章节映射
-    chapter_map = build_chapter_map(chapter_info)
+    # 章节映射与顺序
+    chapter_map, chapter_order, resolve_title = build_chapter_map(chapter_info)
 
-    # 按章节分组
-    highlights_by_chapter = build_highlights(bookmark_list, chapter_map)
-    thoughts_by_chapter = build_thoughts(reviews, chapter_map)
+    # 按章节分组（按阅读顺序排列）
+    highlights_by_chapter = build_highlights(bookmark_list, chapter_map, chapter_order, resolve_title)
+    thoughts_by_chapter = build_thoughts(reviews, chapter_map, chapter_order, resolve_title)
 
     # 统计
     highlight_count = len(bookmark_list.get("updated", []))
@@ -326,6 +412,9 @@ def generate_markdown(data, export_date=None, template_path=None):
         "{{作者}}": author,
         "{{分类}}": category,
         "{{书名}}": title,
+        "{{读完日期}}": filename_date,
+        "{{开始阅读本书的日期}}": ts_to_date(start_reading_time) or "未知",
+        "{{本书阅读完毕的日期}}": ts_to_date(finish_time) if finish_time else "未读完",
         "{{当日导出时间}}": current_export_date,
         "{{导出时间}}": current_export_date,
         "{{bookId}}": book_id,
@@ -352,7 +441,7 @@ def generate_markdown(data, export_date=None, template_path=None):
     result = replace_section(
         result,
         r"## 二、想法与点评（\d+条）",
-        r"\n---\n\n## ",
+        r"\n---\n## 三、读后感",
         thoughts_section or "无想法/点评",
     )
 
